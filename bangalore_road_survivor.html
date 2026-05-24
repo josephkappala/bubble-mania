@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Bangalore Road Survivor</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #111;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      font-family: monospace;
+    }
+    canvas { display: block; image-rendering: pixelated; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+canvas.width  = 360;
+canvas.height = 600;
+
+// ── Layout constants ──────────────────────────────────────────────────────────
+const ROAD_X     = 40;
+const ROAD_W     = 280;
+const LANE_W     = ROAD_W / 3;
+const LANE_CX    = [ROAD_X + LANE_W * 0.5,
+                    ROAD_X + LANE_W * 1.5,
+                    ROAD_X + LANE_W * 2.5];
+
+// ── Scroll / speed ────────────────────────────────────────────────────────────
+const SCROLL_SPD = 4;          // px per frame
+const DASH_LEN   = 36;
+const DASH_GAP   = 30;
+
+// ── Vehicles ──────────────────────────────────────────────────────────────────
+const AUTO_W  = 38;
+const AUTO_H  = 52;
+const AUTO_Y  = canvas.height - 110;
+
+const CAR_W   = 34;
+const CAR_H   = 58;
+
+const SPAWN_EVERY = 85;        // frames
+
+const COLORS = ['red','dodgerblue','limegreen','orange','white','mediumpurple','tomato','deepskyblue'];
+const COLOR_NAMES = {
+  red:'red', dodgerblue:'blue', limegreen:'green', orange:'orange',
+  white:'white', mediumpurple:'purple', tomato:'red', deepskyblue:'blue'
+};
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let state, score, frame, dashOff, player, cars, hitColor, cooldown;
+
+function reset() {
+  state   = 'playing';
+  score   = 0;
+  frame   = 0;
+  dashOff = 0;
+  hitColor = '';
+  cooldown = 0;
+  cars    = [];
+  player  = { lane: 1, x: LANE_CX[1], tx: LANE_CX[1] };
+}
+reset();
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (state !== 'playing') return;
+  if (e.key === 'ArrowLeft'  && player.lane > 0 && cooldown <= 0) {
+    player.lane--;
+    player.tx = LANE_CX[player.lane];
+    cooldown = 12;
+    e.preventDefault();
+  }
+  if (e.key === 'ArrowRight' && player.lane < 2 && cooldown <= 0) {
+    player.lane++;
+    player.tx = LANE_CX[player.lane];
+    cooldown = 12;
+    e.preventDefault();
+  }
+});
+
+canvas.addEventListener('click', e => {
+  if (state !== 'gameover') return;
+  const r  = canvas.getBoundingClientRect();
+  const sx = canvas.width  / r.width;
+  const sy = canvas.height / r.height;
+  const cx = (e.clientX - r.left) * sx;
+  const cy = (e.clientY - r.top)  * sy;
+  const b  = canvas._btn;
+  if (b && cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h) reset();
+});
+
+// ── Update ────────────────────────────────────────────────────────────────────
+function update() {
+  if (state !== 'playing') return;
+  frame++;
+  if (cooldown > 0) cooldown--;
+
+  // smooth slide
+  player.x += (player.tx - player.x) * 0.22;
+
+  // road scroll
+  dashOff = (dashOff + SCROLL_SPD) % (DASH_LEN + DASH_GAP);
+
+  // score: +1 per second (targeting ~60 fps)
+  if (frame % 60 === 0) score++;
+
+  // spawn
+  if (frame % SPAWN_EVERY === 0) {
+    const lane  = Math.floor(Math.random() * 3);
+    const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+    cars.push({ x: LANE_CX[lane], y: -CAR_H / 2, color, name: COLOR_NAMES[color] || color });
+  }
+
+  // move & cull
+  for (const c of cars) c.y += SCROLL_SPD;
+  cars = cars.filter(c => c.y - CAR_H / 2 < canvas.height + 10);
+
+  // collision (AABB with 4px shrink for forgiveness)
+  const shrink = 4;
+  for (const c of cars) {
+    if (Math.abs(player.x - c.x) < (AUTO_W + CAR_W) / 2 - shrink &&
+        Math.abs(AUTO_Y  - c.y) < (AUTO_H + CAR_H) / 2 - shrink) {
+      hitColor = c.name;
+      state = 'gameover';
+      return;
+    }
+  }
+}
+
+// ── Draw helpers ──────────────────────────────────────────────────────────────
+function drawRoad() {
+  // grass shoulders
+  ctx.fillStyle = '#2d5a1b';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // tarmac
+  ctx.fillStyle = '#4a4a4a';
+  ctx.fillRect(ROAD_X, 0, ROAD_W, canvas.height);
+
+  // road edge lines (solid yellow)
+  ctx.strokeStyle = '#FFD700';
+  ctx.lineWidth = 3;
+  ctx.setLineDash([]);
+  [[ROAD_X, 0, ROAD_X, canvas.height],
+   [ROAD_X + ROAD_W, 0, ROAD_X + ROAD_W, canvas.height]].forEach(([x1,y1,x2,y2]) => {
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  });
+
+  // lane dividers (dashed white)
+  ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([DASH_LEN, DASH_GAP]);
+  ctx.lineDashOffset = -dashOff;
+  [ROAD_X + LANE_W, ROAD_X + LANE_W * 2].forEach(lx => {
+    ctx.beginPath(); ctx.moveTo(lx, 0); ctx.lineTo(lx, canvas.height); ctx.stroke();
+  });
+  ctx.setLineDash([]);
+}
+
+function drawCar(c) {
+  // body
+  ctx.fillStyle = c.color;
+  ctx.fillRect(c.x - CAR_W/2, c.y - CAR_H/2, CAR_W, CAR_H);
+
+  // windshield
+  ctx.fillStyle = 'rgba(180,230,255,0.55)';
+  ctx.fillRect(c.x - CAR_W/2 + 4, c.y - CAR_H/2 + 5, CAR_W - 8, 16);
+  // rear window
+  ctx.fillRect(c.x - CAR_W/2 + 4, c.y + CAR_H/2 - 18, CAR_W - 8, 12);
+
+  // wheels (4 corners)
+  ctx.fillStyle = '#1a1a1a';
+  [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([sx,sy]) => {
+    ctx.fillRect(c.x + sx*(CAR_W/2) - (sx>0?0:5),
+                 c.y + sy*(CAR_H/2 - 10) - 4, 5, 8);
+  });
+}
+
+function drawAuto() {
+  const x = player.x, y = AUTO_Y;
+
+  // black outer body
+  ctx.fillStyle = '#111';
+  ctx.fillRect(x - AUTO_W/2, y - AUTO_H/2, AUTO_W, AUTO_H);
+
+  // yellow canopy
+  ctx.fillStyle = '#FFD700';
+  ctx.fillRect(x - AUTO_W/2 + 4, y - AUTO_H/2 + 4, AUTO_W - 8, AUTO_H * 0.5);
+
+  // front triangle nose (black outer)
+  ctx.fillStyle = '#111';
+  ctx.beginPath();
+  ctx.moveTo(x - AUTO_W/2, y - AUTO_H/2);
+  ctx.lineTo(x + AUTO_W/2, y - AUTO_H/2);
+  ctx.lineTo(x, y - AUTO_H/2 - 14);
+  ctx.closePath();
+  ctx.fill();
+
+  // yellow inner nose
+  ctx.fillStyle = '#FFD700';
+  ctx.beginPath();
+  ctx.moveTo(x - AUTO_W/2 + 5, y - AUTO_H/2);
+  ctx.lineTo(x + AUTO_W/2 - 5, y - AUTO_H/2);
+  ctx.lineTo(x, y - AUTO_H/2 - 9);
+  ctx.closePath();
+  ctx.fill();
+
+  // headlight dots
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(x - 10, y - AUTO_H/2 - 1, 5, 3);
+  ctx.fillRect(x +  5, y - AUTO_H/2 - 1, 5, 3);
+
+  // wheels
+  ctx.fillStyle = '#222';
+  // front pair
+  ctx.fillRect(x - AUTO_W/2 - 5, y - AUTO_H/2 + 6,  5, 10);
+  ctx.fillRect(x + AUTO_W/2,     y - AUTO_H/2 + 6,  5, 10);
+  // rear pair
+  ctx.fillRect(x - AUTO_W/2 - 5, y + AUTO_H/2 - 16, 5, 10);
+  ctx.fillRect(x + AUTO_W/2,     y + AUTO_H/2 - 16, 5, 10);
+}
+
+function drawHUD() {
+  ctx.textAlign = 'right';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillText(`DISTANCE: ${score} m`, canvas.width - 8, 28);
+  ctx.fillStyle = '#FFD700';
+  ctx.fillText(`DISTANCE: ${score} m`, canvas.width - 9, 27);
+
+  ctx.textAlign = 'left';
+  ctx.font = '12px monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillText('← → switch lanes', ROAD_X + 4, 27);
+}
+
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+
+  ctx.textAlign = 'center';
+
+  ctx.font = 'bold 30px monospace';
+  ctx.fillStyle = '#ff4444';
+  ctx.fillText('GAME OVER', cx, cy - 85);
+
+  ctx.font = '18px monospace';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(`You hit a ${hitColor} car!`, cx, cy - 44);
+
+  ctx.font = 'bold 24px monospace';
+  ctx.fillStyle = '#FFD700';
+  ctx.fillText(`DISTANCE: ${score} m`, cx, cy + 2);
+
+  // button
+  const bw = 150, bh = 46;
+  const bx = cx - bw / 2, by = cy + 30;
+  ctx.fillStyle = '#FFD700';
+  ctx.beginPath();
+  ctx.roundRect(bx, by, bw, bh, 8);
+  ctx.fill();
+  ctx.fillStyle = '#111';
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText('Try Again', cx, by + 29);
+
+  canvas._btn = { x: bx, y: by, w: bw, h: bh };
+}
+
+// ── Main loop ─────────────────────────────────────────────────────────────────
+function loop() {
+  update();
+
+  // background
+  ctx.fillStyle = '#2d5a1b';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  drawRoad();
+  for (const c of cars) drawCar(c);
+  drawAuto();
+  drawHUD();
+  if (state === 'gameover') drawGameOver();
+
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
